@@ -231,8 +231,44 @@ const PROFILE = {
   location: "",
   salary:   "",
   apiKey:   "",
+  purgeDays: 90,
   resumeContext: ``
 };
+
+
+// ── AUTO PURGE EXPIRED JOBS ────────────────────────────────
+function autoPurgeExpired(){
+  const days = PROFILE.purgeDays || 90;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const before = savedJobs.length;
+  savedJobs = savedJobs.filter(job => {
+    if(!job.expired || !job.expiredDate) return true;
+    return new Date(job.expiredDate) > cutoff;
+  });
+  if(savedJobs.length < before){
+    localStorage.setItem('jcc_share_saved', JSON.stringify(savedJobs));
+  }
+}
+
+// ── SEEN JOBS TRACKING ─────────────────────────────────────
+function markJobSeen(url){
+  if(!url) return;
+  if(!seenJobs.includes(url)){
+    seenJobs.push(url);
+    if(seenJobs.length > 500) seenJobs = seenJobs.slice(-500);
+    localStorage.setItem('jcc_share_seen', JSON.stringify(seenJobs));
+  }
+}
+
+function isSeenJob(url){ return url && seenJobs.includes(url); }
+
+function clearSearchHistory(){
+  seenJobs = [];
+  localStorage.setItem('jcc_share_seen', JSON.stringify(seenJobs));
+  renderJobList();
+  alert('Search history cleared — jobs will no longer show as previously seen.');
+}
 
 // ── Environment detection ──────────────────────────────────
 const IS_ARTIFACT = (() => {
@@ -253,18 +289,19 @@ const TEST_JOBS = [
 const TOP_ORGS = ["Mayo Clinic","Cleveland Clinic","Advocate Health","Ascension Health","CommonSpirit Health","HCA Healthcare","Northwell Health","Sutter Health","Banner Health","Intermountain Healthcare","UPMC","Providence Health","Trinity Health","Baylor Scott & White","AdventHealth","Beaumont Health","Ochsner Health","Mass General Brigham","Geisinger","SSM Health"];
 
 // ── AI Prompts ─────────────────────────────────────────────
-const searchPrompt = () => `You are a healthcare IT executive job search specialist.
+const searchPrompt = () => `You are an expert job search specialist. Read the candidate profile carefully and adapt your search strategy to their specific industry, role level, and background.
 Candidate: ${PROFILE.resumeContext}
 Use web search to find REAL ACTIVE job postings (${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}).
-Search across: LinkedIn Jobs, Indeed, Glassdoor, ZipRecruiter, Workday career portals, Taleo, iCIMS, symplr ATS, and direct healthcare provider career sites.
-Target roles: ERP Director, IT Director, Digital Transformation Director, Enterprise Applications Director.
+Search across: LinkedIn Jobs, Indeed, Glassdoor, ZipRecruiter, Workday, Taleo, iCIMS, Greenhouse, Lever, and relevant industry-specific job boards and company career pages.
+Identify the candidate's target roles, industry, and seniority from their profile and search accordingly.
 STRICT REQUIREMENTS:
 - ONLY include jobs that are currently OPEN and ACTIVELY accepting applications right now
 - EXCLUDE any job that shows as closed, expired, filled, or no longer accepting
-- EXCLUDE Epic clinical roles, UKG Manager-only, C-suite (CIO/CTO/CISO)
-- EXCLUDE any role that mentions: "not eligible for visa sponsorship", "will not sponsor", "will not transfer a visa", "sponsorship not available", "must be authorized to work without sponsorship", "no visa sponsorship", or any similar language indicating they will not support visa transfer or sponsorship
-- Match seniority, salary, location, and industry to candidate profile requirements
-- Apply any scoring boosts or exclusions mentioned in the candidate profile
+- ONLY include roles that match the seniority level specified in the candidate profile
+- ONLY include roles in the industries and locations specified in the candidate profile
+- EXCLUDE any roles the candidate has listed as exclusions in their profile
+- EXCLUDE any role that mentions: "not eligible for visa sponsorship", "will not sponsor", "will not transfer a visa", "sponsorship not available", "must be authorized to work without sponsorship", "no visa sponsorship"
+- Apply any scoring boosts mentioned in the candidate profile (e.g. specific skills, certifications, or technologies)
 - FRESHNESS RULE: If posted date is older than 45 days, reduce score by 20 and add note "⚠️ Posted X days ago — verify still active"
 - If you cannot confirm a job is still active, do NOT include it
 Return ONLY a valid JSON array, no markdown:
@@ -272,15 +309,17 @@ Return ONLY a valid JSON array, no markdown:
 6-8 ACTIVE results posted within last 45 days, sorted by score desc.
 IMPORTANT: If a job was posted more than 45 days ago, reduce its score by 20 and add a note "⚠️ Posted X days ago — verify still active".`;
 
-const matchPrompt = () => `You are a senior executive recruiter. Score candidate vs job.
+const matchPrompt = () => `You are a senior executive recruiter. Score how well this candidate matches the job.
 Candidate: ${PROFILE.resumeContext}
-Flag if salary appears below the target in the candidate profile.
+Read the candidate profile carefully — apply any scoring boosts or exclusions they mention.
+Flag if salary appears below the candidate's target.
 Return ONLY valid JSON, no markdown:
 {"score":0,"title":"","company":"","verdict":"","whyMatch":[],"gaps":[],"keySkills":[],"salaryRange":"","recommendation":"","applyAdvice":""}`;
 
-const coverLetterPrompt = () => `You are an elite executive career coach for senior healthcare IT leaders.
+const coverLetterPrompt = () => `You are an elite executive career coach.
 Candidate: ${PROFILE.resumeContext}
-Write a powerful cover letter (3-4 paragraphs ~350 words). Hook NOT starting with "I am applying". 3 quantified achievements. AI leadership angle. Confident close. Plain text only.`;
+Write a powerful, highly personalized cover letter (3-4 paragraphs ~350 words) tailored to the candidate's industry and role level.
+Hook NOT starting with "I am applying". 3 specific quantified achievements from their background. Confident close. Plain text only.`;
 
 const resumePrompt = () => `You are an executive resume strategist.
 Candidate: ${PROFILE.resumeContext}
@@ -288,6 +327,7 @@ Rewrite top 8-10 resume bullets tailored for the job. Strong action verbs. Metri
 
 // ── App State ──────────────────────────────────────────────
 let savedJobs = JSON.parse(localStorage.getItem('jcc_share_saved')||'[]');
+let seenJobs = JSON.parse(localStorage.getItem('jcc_share_seen')||'[]');
 let searchJobs = [];
 let searchLog = [];
 
@@ -401,6 +441,7 @@ function typeBadge(t){
 
 function renderJobList(){
   if(!searchJobs.length){ $('jobs-container').innerHTML=''; return; }
+  searchJobs.forEach(job => markJobSeen(job.url));
   $('jobs-container').innerHTML=`
     <div class="jobs-header"><strong style="color:var(--teal)">${searchJobs.length} positions</strong> found · ranked by match score</div>
     <div class="jobs-list">
@@ -416,6 +457,7 @@ function renderJobList(){
               <span class="job-title">${job.title}</span>
               ${i===0?'<span class="badge-top">TOP MATCH</span>':''}
               ${typeBadge(job.type)}
+              ${isSeenJob(job.url)?'<span style="font-size:9px;background:rgba(167,139,250,0.12);color:var(--purple);border-radius:4px;padding:2px 6px">👁 Seen before</span>':''}
             </div>
             <div class="job-meta">${job.company} · ${job.location}</div>
             ${job.notes?`<div class="job-notes">${job.notes}</div>`:''}
@@ -661,6 +703,7 @@ function openProfileModal(){
   $('p-location').value=PROFILE.location;
   $('p-salary').value=PROFILE.salary;
   $('p-apikey').value=PROFILE.apiKey||'';
+  $('p-purgedays').value=PROFILE.purgeDays||90;
   $('p-resume').value=PROFILE.resumeContext;
   $('profile-modal').classList.add('open');
 }
@@ -676,6 +719,7 @@ function saveProfile(){
   PROFILE.location = $('p-location').value.trim() || PROFILE.location;
   PROFILE.salary   = $('p-salary').value.trim()   || PROFILE.salary;
   PROFILE.apiKey   = $('p-apikey').value.trim()   || PROFILE.apiKey;
+  PROFILE.purgeDays = parseInt($('p-purgedays').value)||90;
   PROFILE.resumeContext = $('p-resume').value.trim() || PROFILE.resumeContext;
   localStorage.setItem('jcc_share_profile',JSON.stringify(PROFILE));
   updateHeader();
@@ -881,9 +925,12 @@ The more detail, the better your job matches."></textarea>
 
   <!-- SEARCH -->
   <div class="tab-pane active" id="tab-search">
-    <p class="tab-desc">AI searches real job boards and career pages for roles matching your profile. Filters and scoring rules are based on your profile settings.</p>
+    <p class="tab-desc">AI searches real job boards and career pages for roles matching your profile — any industry, any role level. All filters and scoring are based on your profile settings.</p>
 
-    <button class="btn-main" id="btn-search" onclick="runSearch()">🚀  Search Jobs Now</button>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn-main" id="btn-search" onclick="runSearch()">🚀  Search Jobs Now</button>
+      <button onclick="clearSearchHistory()" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;color:var(--text3);padding:13px 18px;font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='rgba(255,107,107,0.3)';this.style.color='var(--red)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)';this.style.color='var(--text3)'">🗑 Clear History</button>
+    </div>
     <div class="search-log" id="search-log"></div>
     <div id="jobs-container"></div>
   </div>
@@ -938,6 +985,11 @@ The more detail, the better your job matches."></textarea>
       <div class="modal-row">
         <div><div class="field-lbl">Location</div><input type="text" id="p-location"></div>
         <div><div class="field-lbl">Salary Target</div><input type="text" id="p-salary"></div>
+      </div>
+      <div>
+        <div class="field-lbl">Auto-Purge Expired Jobs After (days)</div>
+        <input type="text" id="p-purgedays" placeholder="e.g. 90">
+        <div class="field-hint">Expired jobs older than this are automatically removed. Default: 90 days.</div>
       </div>
       <div>
         <div class="field-lbl">Anthropic API Key</div>
@@ -1156,12 +1208,13 @@ async function buildProfileWithAI(){
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
         max_tokens: 2000,
-        system: `You are an expert executive resume writer and career coach. 
+        system: `You are an expert resume writer and career coach who specializes in all industries and role levels.
 Build a comprehensive, well-structured candidate profile from the information provided.
 Write in a professional, first-person-absent style (like a resume/LinkedIn summary).
-Include: positioning statement, core skills, current role description, previous roles, 
-education, target roles, exclusions, and any scoring rules.
-Make it detailed enough to be used for job matching and cover letter generation.
+Adapt your language and positioning to match the candidate's specific industry and career level.
+Include: positioning statement, core skills, current role description, previous roles,
+education, target roles, exclusions, and any scoring notes.
+Make it detailed enough to be used for intelligent job matching, cover letter generation, and resume tailoring.
 Output plain text only — no markdown headers, no bullet symbols, just clean structured text.`,
         messages: [{
           role: 'user',
@@ -1215,6 +1268,7 @@ function saveAndLaunch(){
 }
 
 function bootApp(){
+  autoPurgeExpired();
   document.getElementById('onboarding').style.display='none';
   document.getElementById('app').style.display='block';
   updateHeader();
