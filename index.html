@@ -27,7 +27,9 @@ textarea{resize:vertical}
 textarea:focus,input:focus{border-color:var(--teal-border)}
 
 /* HEADER */
-.header{background:linear-gradient(90deg,var(--bg3),#0D1A2E);border-bottom:1px solid var(--teal-border);padding:14px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:100}
+.header{background:linear-gradient(90deg,var(--bg3),#0D1A2E);border-bottom:1px solid var(--teal-border);padding:14px 24px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:nowrap;gap:16px;position:sticky;top:0;z-index:100}
+.hdr-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hdr-right{flex-shrink:0}
 .hdr-eyebrow{font-size:10px;letter-spacing:3px;color:var(--teal);text-transform:uppercase;margin-bottom:2px}
 .hdr-title{font-size:19px;font-weight:800;letter-spacing:-0.4px}
 .hdr-title .dot{color:var(--teal)}
@@ -59,10 +61,21 @@ textarea:focus,input:focus{border-color:var(--teal-border)}
 .tab-desc{font-size:13px;color:var(--text3);margin:0 0 16px}
 
 /* CONFIG CARD */
-.config-card{background:var(--teal-dim);border:1px solid var(--teal-border);border-radius:10px;padding:14px 18px;margin-bottom:18px;font-size:12px}
-.config-title{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--teal);margin-bottom:10px}
-.config-row{color:var(--text2);margin-bottom:5px}
-.config-row.muted{color:var(--text4)}
+/* FILTERS CARD (collapsed-by-default) */
+.filters-card{background:rgba(0,212,180,0.03);border:1px solid rgba(0,212,180,0.12);border-radius:10px;margin-bottom:18px;overflow:hidden;transition:border-color .15s}
+.filters-card:hover{border-color:rgba(0,212,180,0.25)}
+.filters-head{display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;user-select:none}
+.filters-title{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--teal);flex-shrink:0}
+.filters-summary{flex:1;font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.filters-toggle{font-size:10px;color:var(--text4);flex-shrink:0;letter-spacing:1px}
+.filters-body{padding:4px 14px 14px;border-top:1px solid rgba(0,212,180,0.08);display:none}
+.filters-card.open .filters-body{display:block}
+.filter-group{margin-top:10px}
+.filter-group:first-child{margin-top:6px}
+.filter-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--teal);margin-bottom:4px;opacity:.8}
+.filter-group.muted .filter-label{color:var(--text4)}
+.filter-items{font-size:12px;color:var(--text2);line-height:1.55}
+.filter-group.muted .filter-items{color:var(--text4)}
 
 /* BUTTONS */
 .btn-main{background:linear-gradient(135deg,var(--teal),#009E86);border:none;border-radius:8px;color:var(--bg);padding:13px 30px;font-size:14px;font-weight:800;font-family:'DM Sans',sans-serif;cursor:pointer;transition:opacity .15s}
@@ -270,10 +283,26 @@ function clearSearchHistory(){
   alert('Search history cleared — jobs will no longer show as previously seen.');
 }
 
-// ── Environment detection ──────────────────────────────────
-const IS_ARTIFACT = (() => {
-  try { return window.self !== window.top; } catch(e) { return true; }
+// ── Environment detection (with manual override) ──────────
+// Auto-detect: cross-origin iframe access throws (artifact), or the sandbox
+// runs as about:srcdoc / blob: / null-origin. If auto-detect gets it wrong,
+// the user can click the mode banner to flip it — preference persists.
+const MODE_OVERRIDE_KEY = 'jcc_share_mode_override';
+let IS_ARTIFACT = (() => {
+  const saved = localStorage.getItem(MODE_OVERRIDE_KEY);
+  if (saved === 'artifact') return true;
+  if (saved === 'browser')  return false;
+  try { if (window.self !== window.top) return true; } catch(e) { return true; }
+  const proto = location.protocol;
+  if (proto === 'about:' || proto === 'blob:' || location.origin === 'null') return true;
+  return false;
 })();
+
+function toggleMode(){
+  const next = IS_ARTIFACT ? 'browser' : 'artifact';
+  localStorage.setItem(MODE_OVERRIDE_KEY, next);
+  location.reload();
+}
 
 // ── Test data for artifact mode (no API calls needed) ──────
 const TEST_JOBS = [
@@ -289,8 +318,9 @@ const TEST_JOBS = [
 const TOP_ORGS = ["Mayo Clinic","Cleveland Clinic","Advocate Health","Ascension Health","CommonSpirit Health","HCA Healthcare","Northwell Health","Sutter Health","Banner Health","Intermountain Healthcare","UPMC","Providence Health","Trinity Health","Baylor Scott & White","AdventHealth","Beaumont Health","Ochsner Health","Mass General Brigham","Geisinger","SSM Health"];
 
 // ── AI Prompts ─────────────────────────────────────────────
+// Search uses Sonnet 4.5 + rich constraints for quality. Expected ~$0.40–0.50
+// per live search. 24h cache makes repeat clicks free, so daily cost stays low.
 const searchPrompt = () => `You are an expert job search specialist. Read the candidate profile carefully and adapt your search strategy to their specific industry, role level, and background.
-Candidate: ${PROFILE.resumeContext}
 Use web search to find REAL ACTIVE job postings (${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}).
 Search across: LinkedIn Jobs, Indeed, Glassdoor, ZipRecruiter, Workday, Taleo, iCIMS, Greenhouse, Lever, and relevant industry-specific job boards and company career pages.
 Identify the candidate's target roles, industry, and seniority from their profile and search accordingly.
@@ -310,20 +340,50 @@ Return ONLY a valid JSON array, no markdown:
 IMPORTANT: If a job was posted more than 45 days ago, reduce its score by 20 and add a note "⚠️ Posted X days ago — verify still active".`;
 
 const matchPrompt = () => `You are a senior executive recruiter. Score how well this candidate matches the job.
-Candidate: ${PROFILE.resumeContext}
 Read the candidate profile carefully — apply any scoring boosts or exclusions they mention.
 Flag if salary appears below the candidate's target.
 Return ONLY valid JSON, no markdown:
 {"score":0,"title":"","company":"","verdict":"","whyMatch":[],"gaps":[],"keySkills":[],"salaryRange":"","recommendation":"","applyAdvice":""}`;
 
-const coverLetterPrompt = () => `You are an elite executive career coach.
-Candidate: ${PROFILE.resumeContext}
-Write a powerful, highly personalized cover letter (3-4 paragraphs ~350 words) tailored to the candidate's industry and role level.
-Hook NOT starting with "I am applying". 3 specific quantified achievements from their background. Confident close. Plain text only.`;
+const coverLetterPrompt = () => `You write executive cover letters for Director/VP-level hires across any industry.
 
-const resumePrompt = () => `You are an executive resume strategist.
-Candidate: ${PROFILE.resumeContext}
-Rewrite top 8-10 resume bullets tailored for the job. Strong action verbs. Metrics. Start each with •`;
+Write ONE cover letter for the job below, tailored to the candidate in the system profile.
+
+STRUCTURE (prose only, no bullets, no subheadings):
+- Paragraph 1 (2–3 sentences): Lead with something specific to THIS employer — their business, scale, or market — connected to the candidate's most relevant current scope. Do NOT start with "I am applying", "I am writing", or "I have always been passionate".
+- Paragraph 2 (3–4 sentences): ONE crisp quantified achievement that maps to the JD's #1 requirement. Include the metric (dollars, people, time, %, awards).
+- Paragraph 3 (3–4 sentences): Two more quantified achievements that map to the JD's #2 and #3 requirements. Separate sentences per achievement.
+- Paragraph 4 (1–2 sentences): Confident close. Mention relocation or location if relevant. No thanks clichés.
+
+HARD RULES:
+- 260–320 words total.
+- Reference the employer's name at least twice.
+- NO filler: "passionate about", "excited to", "perfect fit", "dynamic", "results-driven", "beyond the technical track record".
+- End with: name · phone · email on one line.
+
+Return only the letter. No commentary.`;
+
+const resumePrompt = () => `You rewrite resume bullets for executive Director/VP roles.
+
+Task: Produce 8–10 bullets tailored to the job below, ranked FROM MOST to LEAST relevant against the JD's requirements.
+
+STRUCTURE per bullet:
+- Strong past-tense verb + scope + outcome + METRIC.
+- Verb pool: Led, Architected, Delivered, Pioneered, Spearheaded, Directed, Owned, Launched, Scaled, Consolidated, Transformed, Recovered, Reduced, Grew.
+- Every bullet MUST include at least one number: $ amount, headcount, % change, count, or timeframe. If the profile gives no metric, approximate with scope ("10+", "$X-million portfolio").
+- 1 line per bullet, ≤180 characters.
+- Start each with • (bullet character).
+
+BANNED: "Responsible for", "Helped", "Worked on", "Assisted with", "results-driven", "dynamic leader", "strategic initiatives", "synergies", personal pronouns ("I", "we", "my").
+
+Return only the bulleted list. No header, no commentary.`;
+
+const fetchJDPrompt = () => `You fetch and extract job descriptions from posting URLs.
+Use web_search to retrieve the page at the URL the user provides.
+Return ONLY the plain-text job description — title, company, location, overview, responsibilities, qualifications, and salary if shown.
+Remove site chrome, cookie banners, "apply now" buttons, navigation, and unrelated job listings.
+If the page is inaccessible or not a job posting, reply with exactly: FETCH_FAILED followed by a one-line reason.
+No markdown, no preamble, no commentary — just the clean JD text.`;
 
 // ── App State ──────────────────────────────────────────────
 let savedJobs = JSON.parse(localStorage.getItem('jcc_share_saved')||'[]');
@@ -331,23 +391,110 @@ let seenJobs = JSON.parse(localStorage.getItem('jcc_share_seen')||'[]');
 let searchJobs = [];
 let searchLog = [];
 
+// ── 24h Search Cache ──────────────────────────────────────
+// Repeat "Search Jobs" clicks within 24h hit the cache — $0 API cost.
+// Click "🔄 Force Refresh" to run a fresh live search.
+const SEARCH_CACHE_HOURS = 24;
+function getCachedSearch(){
+  try{
+    const c = JSON.parse(localStorage.getItem('jcc_share_search_cache')||'null');
+    if(!c || !c.ts) return null;
+    if(Date.now() - c.ts > SEARCH_CACHE_HOURS*3600*1000) return null;
+    return c;
+  }catch(e){ return null; }
+}
+function setCachedSearch(jobs){
+  localStorage.setItem('jcc_share_search_cache', JSON.stringify({ts:Date.now(), jobs}));
+}
+function clearCachedSearch(){ localStorage.removeItem('jcc_share_search_cache'); }
+
+// ── Cost tracking (daily session counter, reads data.usage) ─
+// Pricing dispatches by model (data.model). Sonnet 4.5 is the default;
+// Search uses Haiku 4.5 (~4× cheaper) — see runSearch.
+let apiCostToday = JSON.parse(localStorage.getItem('jcc_share_cost')||'{"day":"","total":0}');
+(function initCost(){
+  const today = new Date().toISOString().slice(0,10);
+  if(apiCostToday.day !== today){ apiCostToday = {day: today, total: 0}; saveCost(); }
+})();
+function saveCost(){ localStorage.setItem('jcc_share_cost', JSON.stringify(apiCostToday)); }
+function priceSheet(model){
+  // Per-million-token pricing. Update when Anthropic changes pricing.
+  if (/haiku/i.test(model||'')) {
+    return { input: 0.80, output: 4, cacheRead: 0.08, cacheCreate: 1 };
+  }
+  // Default = Sonnet 4.5
+  return { input: 3, output: 15, cacheRead: 0.3, cacheCreate: 3.75 };
+}
+function trackCost(data){
+  const u = data.usage || {};
+  const p = priceSheet(data.model);
+  const searches = (data.content||[]).filter(b=>b.type==='server_tool_use' && b.name==='web_search').length;
+  const cost =
+    ((u.input_tokens||0) * p.input) / 1e6 +
+    ((u.output_tokens||0) * p.output) / 1e6 +
+    ((u.cache_read_input_tokens||0) * p.cacheRead) / 1e6 +
+    ((u.cache_creation_input_tokens||0) * p.cacheCreate) / 1e6 +
+    searches * 0.01; // $10/1000 web searches (same for any model)
+  apiCostToday.total += cost;
+  saveCost();
+  updateCostDisplay();
+}
+function updateCostDisplay(){
+  const el = document.getElementById('api-cost-display');
+  if(el) el.textContent = `API $${apiCostToday.total.toFixed(3)} today`;
+}
+function resetCostToday(){
+  apiCostToday = { day: new Date().toISOString().slice(0,10), total: 0 };
+  saveCost(); updateCostDisplay();
+}
+
 // ── API Call ───────────────────────────────────────────────
-async function callAPI(system, user, maxTokens=1500, webSearch=false, gmail=false) {
-  const body = {model:"claude-sonnet-4-5",max_tokens:maxTokens,system,messages:[{role:"user",content:user}]};
-  if(webSearch) body.tools=[{type:"web_search_20250305",name:"web_search"}];
+// Note: prompt caching was removed. Most users' resumeContext sits below
+// Anthropic's 1024-token cache minimum, so cache_control was a no-op.
+// System prompt is now a plain string — same content the model saw anyway.
+// The `model` parameter lets callers pick per-call (e.g. Haiku for cheap search,
+// Sonnet for quality on cover letters/resumes). Default: Sonnet 4.5.
+async function callAPI(system, user, maxTokens=800, webSearch=false, gmail=false, model="claude-sonnet-4-5") {
+  // Artifact mode can't reach api.anthropic.com from inside Claude's sandbox.
+  // Give the user a clear, actionable message instead of a raw "Failed to fetch".
+  if (IS_ARTIFACT) {
+    throw new Error("Artifact mode can't reach the API. Click 'Switch →' on the banner to switch to Browser mode, then open this file locally with your API key set via ✏️ Edit Profile.");
+  }
+  if (!PROFILE.apiKey) {
+    throw new Error("No API key set. Click ✏️ Edit Profile and paste your Anthropic API key.");
+  }
+  const body = {
+    model: model,
+    max_tokens: maxTokens,
+    system:`CANDIDATE PROFILE:\n${PROFILE.resumeContext}\n\n${system}`,
+    messages:[{role:"user",content:user}]
+  };
+  if(webSearch) body.tools=[{type:"web_search_20250305",name:"web_search",max_uses:8}];
   if(gmail) body.mcp_servers=[{type:"url",url:"https://gmailmcp.googleapis.com/mcp/v1",name:"gmail-mcp"}];
-  const res = await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-api-key": PROFILE.apiKey,
-      "anthropic-version":"2023-06-01",
-      "anthropic-dangerous-direct-browser-access":"true"
-    },
-    body:JSON.stringify(body)
-  });
+  let res;
+  try {
+    res = await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "x-api-key": PROFILE.apiKey,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body:JSON.stringify(body)
+    });
+  } catch(e) {
+    // Rewrite the generic "Failed to fetch" that browsers throw when the
+    // request is blocked (sandboxed iframe, CORS, DNS, offline, etc.) into
+    // something the user can actually act on.
+    if (e && e.message && /failed to fetch|networkerror|load failed/i.test(e.message)) {
+      throw new Error("Network request blocked. If you're viewing this inside Claude's artifact panel, save the HTML file locally and open it directly in Chrome/Edge — artifact iframes can't reach external APIs.");
+    }
+    throw e;
+  }
   const data = await res.json();
   if(data.error) throw new Error(data.error.message||JSON.stringify(data.error));
+  trackCost(data);
   return data;
 }
 
@@ -374,7 +521,7 @@ function updateBadges(){
 }
 
 // ── SEARCH ─────────────────────────────────────────────────
-async function runSearch(){
+async function runSearch(forceRefresh=false){
   const btn=$('btn-search');
   btn.disabled=true; btn.textContent='⚙️  Searching...';
   searchJobs=[]; searchLog=[];
@@ -384,6 +531,21 @@ async function runSearch(){
   function log(m){
     searchLog.push(m);
     $('search-log').innerHTML=searchLog.map((l,i)=>`<div class="log-line ${i===searchLog.length-1?'latest':''}">${l}</div>`).join('');
+  }
+
+  // Serve from 24h cache when available, unless user forced a refresh
+  if(!IS_ARTIFACT && !forceRefresh){
+    const cached = getCachedSearch();
+    if(cached){
+      const hoursAgo = ((Date.now()-cached.ts)/3600000).toFixed(1);
+      log(`⚡ Using cached results from ${hoursAgo}h ago — $0 API cost.`);
+      log(`Click 🔄 Force Refresh for a live search (costs ~$0.15–0.40).`);
+      searchJobs = cached.jobs;
+      renderJobList();
+      btn.disabled=false; btn.textContent='🚀  Search Jobs Now';
+      updateBadges();
+      return;
+    }
   }
 
   if(IS_ARTIFACT){
@@ -403,6 +565,9 @@ async function runSearch(){
     log("🚀 Launching live web search...");
     log(`🔍 Searching LinkedIn, Indeed, Glassdoor + ${TOP_ORGS.length} career pages...`);
     try {
+      // Search uses Sonnet 4.5 (the callAPI default) for quality.
+      // To experiment with Haiku later, pass "claude-haiku-4-5-20251001"
+      // as the 6th argument. trackCost auto-detects and prices accordingly.
       const data = await callAPI(searchPrompt(),
         `Find current healthcare IT executive job openings for ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})} matching this profile. Use web search.`,
         5000, true
@@ -416,11 +581,14 @@ async function runSearch(){
       if(!parsed){ try{ const s=allText.indexOf('['),e=allText.lastIndexOf(']'); if(s>=0&&e>s) parsed=JSON.parse(allText.substring(s,e+1)); }catch(e){} }
       if(parsed?.length>0){
         searchJobs=parsed.sort((a,b)=>b.score-a.score);
-        log(`✅ Found ${searchJobs.length} real matching positions!`);
+        setCachedSearch(searchJobs);
+        log(`✅ Found ${searchJobs.length} matching positions! Cached for 24h.`);
         renderJobList();
       } else {
-        log("⚠️  Could not parse results — please try again.");
-        console.log("Raw response:", allText.substring(0,500));
+        // Show first part of the response so you can see what came back
+        const preview = allText.trim().slice(0, 300).replace(/</g,'&lt;');
+        log("⚠️  Could not parse results. Raw response preview:");
+        log(`<code style="font-size:11px;color:var(--text4)">${preview || '(empty)'}</code>`);
       }
     } catch(e){ log(`❌ Error: ${e.message}`); }
   }
@@ -463,7 +631,7 @@ function renderJobList(){
             ${job.notes?`<div class="job-notes">${job.notes}</div>`:''}
             <div class="reasons">${(job.matchReasons||[]).map(r=>`<span class="rtag">✓ ${r}</span>`).join('')}</div>
             <div class="job-btns">
-              ${job.url?`<a href="${job.url}" target="_blank" class="btn-sm bs-teal">🔗 View Job</a>`:''}
+              ${job.url?`<a href="${job.url}" target="_blank" rel="noopener" class="btn-sm bs-teal" onclick="return viewExternalLink(this,event)">🔗 View Job</a>`:''}
               <button class="btn-sm bs-gold" onclick="loadToMatch(${i})">⚡ Match & Apply</button>
               <button class="btn-sm ${isSaved(job)?'bs-saved':'bs-muted'}" onclick="toggleSave(${i})" id="sv-${i}">
                 ${isSaved(job)?'✓ Saved':'⭐ Save'}
@@ -476,7 +644,10 @@ function renderJobList(){
 
 function loadToMatch(i){
   const job=searchJobs[i];
-  $('jd').value=`${job.title} at ${job.company}\nLocation: ${job.location}\n\nRequirements:\n${(job.requirements||[]).join('\n')}`;
+  // Pre-fill URL so user can click 📥 Fetch JD for the real posting.
+  // Keep the requirements blurb in the JD box as a placeholder; fetch replaces it.
+  $('jd-url').value = job.url || '';
+  $('jd').value=`${job.title} at ${job.company}\nLocation: ${job.location}\n\nRequirements:\n${(job.requirements||[]).join('\n')}\n\n(Click 📥 Fetch JD above to pull the real posting text for higher-quality cover letter/resume output.)`;
   setTab('match'); checkJD();
 }
 
@@ -495,6 +666,44 @@ function toggleSave(i){
 }
 
 // ── MATCH ──────────────────────────────────────────────────
+// Fetch the full JD from a posting URL via one targeted web_search call.
+// Cost: ~3–5¢ per fetch (1 search use + ~1k in + ~800 out tokens).
+async function doFetchJD(){
+  const url = $('jd-url').value.trim();
+  if(!url || !/^https?:\/\//i.test(url)){
+    alert('Paste a valid job posting URL (starting with http:// or https://) first.');
+    return;
+  }
+  if(IS_ARTIFACT){
+    alert('Fetching the real JD requires API access — open this as a local HTML file with your API key set in Edit Profile.');
+    return;
+  }
+  if(!PROFILE.apiKey){
+    alert('Add your Anthropic API key via ✏️ Edit Profile to use Fetch JD.');
+    return;
+  }
+  const btn = $('btn-fetch-jd'); btn.disabled = true; btn.textContent = '⏳ Fetching...';
+  try {
+    const data = await callAPI(
+      fetchJDPrompt(),
+      `Fetch and extract the job description at this URL: ${url}`,
+      1500, true
+    );
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim();
+    if(text.startsWith('FETCH_FAILED')){
+      alert('Could not fetch that URL. Reason: ' + text.replace(/^FETCH_FAILED:?/,'').trim() + '\n\nPaste the JD text directly instead.');
+    } else if(text.length < 80){
+      alert('Fetched content looks empty or too short. Paste the JD text directly instead.');
+    } else {
+      $('jd').value = text;
+      checkJD();
+    }
+  } catch(e){
+    alert('Fetch error: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = '📥 Fetch JD';
+}
+
 function checkJD(){
   const ok=$('jd').value.trim().length>0;
   ['btn-score','btn-cl','btn-resume'].forEach(id=>$(id).disabled=!ok);
@@ -541,7 +750,9 @@ async function doCoverLetter(){
     $('cl-text').textContent=getText(data);
     $('cl-out').style.display='block';
     $('btn-copy-cl').onclick=()=>doCopy(getText(data),'btn-copy-cl');
-  }catch(e){}
+  }catch(e){
+    $('match-out').innerHTML=`<div class="status status-err" style="display:block">❌ ${e.message}</div>`;
+  }
   btn.disabled=false; btn.textContent='✍️ Cover Letter'; checkJD();
 }
 
@@ -553,7 +764,9 @@ async function doResume(){
     $('res-text').textContent=getText(data);
     $('res-out').style.display='block';
     $('btn-copy-res').onclick=()=>doCopy(getText(data),'btn-copy-res');
-  }catch(e){}
+  }catch(e){
+    $('match-out').innerHTML=`<div class="status status-err" style="display:block">❌ ${e.message}</div>`;
+  }
   btn.disabled=false; btn.textContent='📄 Tailor Resume'; checkJD();
 }
 
@@ -561,6 +774,55 @@ function doCopy(text,btnId){
   navigator.clipboard.writeText(text).then(()=>{
     const btn=$(btnId); const orig=btn.textContent;
     btn.textContent='✓ Copied!'; setTimeout(()=>btn.textContent=orig,2000);
+  });
+}
+
+// Open a link in a new tab. Claude's artifact sandbox can silently block
+// window.open, navigator.clipboard, AND window.prompt, so in artifact mode
+// we go straight to a DOM modal that shows the URL for manual copy.
+function viewExternalLink(aEl, event){
+  if (event) event.preventDefault();
+  const url = aEl.href || aEl.getAttribute('href');
+  if (!url) return false;
+  if (IS_ARTIFACT) {
+    showUrlDialog(url);
+    return false;
+  }
+  let w = null;
+  try { w = window.open(url, '_blank', 'noopener,noreferrer'); } catch(e) {}
+  if (!w) showUrlDialog(url);
+  return false;
+}
+
+function showUrlDialog(url){
+  const existing = document.getElementById('__url-dialog__');
+  if (existing) existing.remove();
+  const safe = String(url).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const overlay = document.createElement('div');
+  overlay.id = '__url-dialog__';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:99999;font-family:\'DM Sans\',sans-serif';
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.innerHTML = `
+    <div style="background:#0C2233;border:1px solid rgba(0,212,180,0.35);border-radius:12px;padding:22px;max-width:90%;width:520px;box-shadow:0 10px 40px rgba(0,0,0,0.6)">
+      <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#00D4B4;margin-bottom:10px">Job posting URL</div>
+      <div style="font-size:13px;color:#E2E7EA;margin-bottom:14px;line-height:1.5">Sandbox can't open new tabs from here. The URL below is already selected — press <strong>Ctrl/Cmd + C</strong> to copy, then paste into a new browser tab.</div>
+      <input type="text" value="${safe}" readonly id="__url-input__" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(0,212,180,0.25);border-radius:6px;color:#E2E7EA;padding:10px 12px;font-size:12px;font-family:'DM Mono',monospace;margin-bottom:14px;box-sizing:border-box">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" id="__url-close-btn__" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#BAC3C8;padding:8px 16px;font-size:12px;cursor:pointer">Close</button>
+        <button type="button" id="__url-copy-btn__" style="background:linear-gradient(135deg,#00D4B4,#009E86);border:none;border-radius:6px;color:#0C2233;padding:8px 16px;font-size:12px;font-weight:700;cursor:pointer">📋 Copy</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = document.getElementById('__url-input__');
+  setTimeout(() => { input.focus(); input.select(); }, 30);
+  document.getElementById('__url-close-btn__').addEventListener('click', () => overlay.remove());
+  document.getElementById('__url-copy-btn__').addEventListener('click', () => {
+    input.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch(e) {}
+    const btn = document.getElementById('__url-copy-btn__');
+    btn.textContent = ok ? '✓ Copied!' : '⚠ Select + Ctrl/Cmd+C';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 1800);
   });
 }
 
@@ -743,24 +1005,30 @@ function toggleSalary(){
 }
 
 function updateHeader(){
-  $('hdr-name').textContent=PROFILE.name;
-  $('hdr-title-row').innerHTML=`${PROFILE.name} <span class="dot"> · </span>Job Command Center`;
-  $('r-role').textContent=PROFILE.headline;
-  $('r-email').textContent=PROFILE.email;
-  $('r-meta').textContent=(PROFILE.location||'');
+  // Defensive: element IDs can drift if templates change; a null ref here
+  // used to crash the whole init sequence (including profile-modal handler).
+  const setText = (id, val) => { const el=$(id); if(el) el.textContent = val||''; };
+  const setHTML = (id, val) => { const el=$(id); if(el) el.innerHTML = val; };
+  setHTML('hdr-title-row', `${PROFILE.name||''} <span class="dot"> · </span>Job Command Center`);
+  setText('r-role',  PROFILE.headline);
+  setText('r-email', PROFILE.email);
+  setText('r-meta',  PROFILE.location||'');
 }
 
 // ── INIT ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',()=>{
   // Onboarding handles init for share version
 
+  updateCostDisplay();
+
   // Show mode banner
+  const switchLink = `<a onclick="toggleMode()" style="color:inherit;text-decoration:underline;cursor:pointer;margin-left:10px;font-weight:700">Switch →</a>`;
   if(IS_ARTIFACT){
     $('mode-banner').className='mode-banner mode-artifact';
-    $('mode-banner').innerHTML='🔵 Artifact mode — Search uses curated test data. All other features (Score, Cover Letter, Resume) require HTML file with API key.';
+    $('mode-banner').innerHTML='🔵 Artifact mode — Search uses curated test data. Other features (Score, Cover Letter, Resume) need the HTML file with API key.'+switchLink;
   } else {
     $('mode-banner').className='mode-banner mode-browser';
-    $('mode-banner').innerHTML='🟢 Browser mode — Live web search enabled. Add your API key via ✏️ Edit Profile to activate all features.';
+    $('mode-banner').innerHTML='🟢 Browser mode — Live web search enabled. Add your API key via ✏️ Edit Profile to activate all features.'+switchLink;
   }
 
   // Close modal on overlay click
@@ -900,7 +1168,7 @@ The more detail, the better your job matches."></textarea>
     <div class="r-role" id="r-role"></div>
     <div class="r-email" id="r-email"></div>
     <div class="r-meta" id="r-meta"></div>
-    <div style="font-size:11px;color:var(--text4);margin-top:2px">Salary: <span id="salary-mask">••••••</span> <a onclick="toggleSalary()" style="color:var(--text4);cursor:pointer;font-size:10px;text-decoration:underline" id="salary-toggle">show</a></div>
+    <div style="font-size:11px;color:var(--text4);margin-top:2px">Salary: <span id="salary-mask">••••••</span> <a onclick="toggleSalary()" style="color:var(--text4);cursor:pointer;font-size:10px;text-decoration:underline" id="salary-toggle">show</a> <span style="color:var(--text4);margin:0 6px">·</span> <span id="api-cost-display" style="color:var(--teal);font-weight:600">API $0.000 today</span> <a onclick="resetCostToday()" style="color:var(--text4);cursor:pointer;font-size:10px;text-decoration:underline">reset</a></div>
     <button class="edit-btn" onclick="openProfileModal()">✏️ Edit Profile</button>
   </div>
 </div>
@@ -929,6 +1197,7 @@ The more detail, the better your job matches."></textarea>
 
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn-main" id="btn-search" onclick="runSearch()">🚀  Search Jobs Now</button>
+      <button onclick="clearCachedSearch();runSearch(true)" title="Bypass 24h cache — costs ~$0.15–0.40" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;color:var(--text3);padding:13px 18px;font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='rgba(0,212,180,0.4)';this.style.color='var(--teal)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)';this.style.color='var(--text3)'">🔄 Force Refresh</button>
       <button onclick="clearSearchHistory()" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;color:var(--text3);padding:13px 18px;font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='rgba(255,107,107,0.3)';this.style.color='var(--red)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)';this.style.color='var(--text3)'">🗑 Clear History</button>
     </div>
     <div class="search-log" id="search-log"></div>
@@ -937,8 +1206,12 @@ The more detail, the better your job matches."></textarea>
 
   <!-- MATCH -->
   <div class="tab-pane" id="tab-match">
-    <p class="tab-desc">Paste any job description or click ⚡ Match & Apply on any search result. Score, generate cover letter and resume bullets instantly.</p>
-    <textarea id="jd" rows="7" placeholder="Paste the full job description here..." oninput="checkJD()"></textarea>
+    <p class="tab-desc">Paste a job URL and click 📥 Fetch JD — or paste the full JD directly. Then Score, generate cover letter and resume bullets.</p>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <input type="url" id="jd-url" placeholder="Paste job posting URL (LinkedIn, Workday, careers page, etc.)" style="flex:1;min-width:260px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;color:var(--text2);padding:10px 12px;font-size:13px;font-family:'DM Sans',sans-serif">
+      <button class="btn-act btn-teal" id="btn-fetch-jd" onclick="doFetchJD()" style="padding:10px 18px">📥 Fetch JD</button>
+    </div>
+    <textarea id="jd" rows="7" placeholder="...or paste the full job description here directly" oninput="checkJD()"></textarea>
     <div class="action-row">
       <button class="btn-act btn-teal" id="btn-score" disabled onclick="doScore()">⚡ Score This Job</button>
       <button class="btn-act btn-gold" id="btn-cl" disabled onclick="doCoverLetter()">✍️ Cover Letter</button>
@@ -1270,21 +1543,39 @@ function saveAndLaunch(){
 function bootApp(){
   autoPurgeExpired();
   document.getElementById('onboarding').style.display='none';
-  document.getElementById('app').style.display='block';
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.style.display='block';
   updateHeader();
   updateBadges();
+  updateCostDisplay();
   renderSaved();
-  updateConfigCard();
-  if(PROFILE.apiKey) document.getElementById('api-warning').style.display='none';
+  const warn = document.getElementById('api-warning');
+  if (warn && !PROFILE.apiKey && !IS_ARTIFACT) warn.style.display='flex';
+  else if (warn) warn.style.display='none';
+  // Mode banner (onboarding path doesn't hit the main DOMContentLoaded handler)
+  const banner = document.getElementById('mode-banner');
+  if (banner){
+    const switchLink = `<a onclick="toggleMode()" style="color:inherit;text-decoration:underline;cursor:pointer;margin-left:10px;font-weight:700">Switch →</a>`;
+    if (IS_ARTIFACT){
+      banner.className='mode-banner mode-artifact';
+      banner.innerHTML='🔵 Artifact mode — Search uses curated test data. Other features (Score, Cover Letter, Resume) need the HTML file with API key.'+switchLink;
+    } else {
+      banner.className='mode-banner mode-browser';
+      banner.innerHTML='🟢 Browser mode — Live web search enabled. Add your API key via ✏️ Edit Profile to activate all features.'+switchLink;
+    }
+  }
 }
 
-// Restore from localStorage on load
+// Restore from localStorage on load.
+// Onboarding is complete once name + resumeContext are set.
+// API key is optional here (artifact mode doesn't need one; browser mode
+// shows an API-key warning banner separately when missing).
 (function(){
   const saved = localStorage.getItem('jcc_share_profile');
   if(saved){
     try{
       Object.assign(PROFILE, JSON.parse(saved));
-      if(PROFILE.name && PROFILE.apiKey && PROFILE.resumeContext){
+      if(PROFILE.name && PROFILE.resumeContext){
         bootApp(); return;
       }
     }catch(e){}
