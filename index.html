@@ -1,4 +1,18 @@
 <!DOCTYPE html>
+<!--
+  JOB COMMAND CENTER — SHARE VERSION
+  ==================================
+  Generic multi-industry version for sharing with friends.
+  For the healthcare-tuned personal version, see job_command_center_rajesh.html.
+
+  CHANGELOG
+  ---------
+  2026-04-19  Bias-leak cleanup before public share:
+              - Removed hardcoded "healthcare IT executive" from user message to Claude (line ~572)
+              - Genericized search status log messages (lines ~553, 555, 566)
+              - Emptied healthcare-specific TOP_ORGS array (was leaking via count display only)
+              - Added comment flagging TEST_JOBS as healthcare demo data
+-->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -305,6 +319,10 @@ function toggleMode(){
 }
 
 // ── Test data for artifact mode (no API calls needed) ──────
+// TEST_JOBS — demo-only data shown in artifact preview mode (when API is not callable).
+// These examples are intentionally healthcare/PeopleSoft to illustrate the format.
+// In live browser mode, Claude generates results dynamically from the candidate profile,
+// so this list is NOT seen by friends running real searches.
 const TEST_JOBS = [
   {title:"Director of ERP & Digital Transformation",company:"Advocate Health",location:"Chicago, IL",type:"Hybrid",score:95,url:"https://careers.advocatehealth.com",matchReasons:["PeopleSoft HCM/FSCM required — +10 applied","18+ years ERP experience","AI transformation leadership","4-hospital system scale match"],requirements:["15+ years ERP","PeopleSoft HCM/FSCM","Healthcare IT","Cloud migration","Team leadership 10+"],postedDate:"Apr 14, 2026",notes:"PeopleSoft required — +10 boost applied. Strongest overall match."},
   {title:"HRIS Director – PeopleSoft & Cloud",company:"HCA Healthcare",location:"Nashville, TN (Hybrid)",type:"Hybrid",score:93,url:"https://careers.hcahealthcare.com",matchReasons:["PeopleSoft HCM expert — +10 applied","HRIS leadership","UKG Pro integration","SailPoint experience"],requirements:["PeopleSoft HCM","HRIS Director","UKG Pro","SailPoint","10+ years"],postedDate:"Apr 15, 2026",notes:"PeopleSoft HCM required — +10 applied. Salary $185K-$215K."},
@@ -315,7 +333,10 @@ const TEST_JOBS = [
   {title:"VP of Enterprise Technology",company:"Banner Health",location:"Phoenix, AZ",type:"Hybrid",score:78,url:"https://careers.bannerhealth.com",matchReasons:["ERP ownership","Cloud migration","Healthcare scale","AI initiatives"],requirements:["ERP strategy","Cloud migration","Healthcare IT","15+ years","Director/VP level"],postedDate:"Apr 9, 2026",notes:"VP level — below C-suite threshold. Strong but broad scope."}
 ];
 
-const TOP_ORGS = ["Mayo Clinic","Cleveland Clinic","Advocate Health","Ascension Health","CommonSpirit Health","HCA Healthcare","Northwell Health","Sutter Health","Banner Health","Intermountain Healthcare","UPMC","Providence Health","Trinity Health","Baylor Scott & White","AdventHealth","Beaumont Health","Ochsner Health","Mass General Brigham","Geisinger","SSM Health"];
+// TOP_ORGS kept as empty array for share version — Claude populates target companies
+// dynamically from the candidate profile's target industries. Previously hardcoded to
+// healthcare systems, which biased search results for non-healthcare users.
+const TOP_ORGS = [];
 
 // ── AI Prompts ─────────────────────────────────────────────
 // Search uses Sonnet 4.5 + rich constraints for quality. Expected ~$0.40–0.50
@@ -550,9 +571,9 @@ async function runSearch(forceRefresh=false){
 
   if(IS_ARTIFACT){
     // Artifact mode — use test data, no API call needed
-    log("🚀 Launching job search across healthcare companies...");
+    log("🚀 Launching job search across target companies...");
     await delay(500);
-    log(`🔍 Scanning ${TOP_ORGS.length} top health system career pages...`);
+    log(`🔍 Scanning top career pages in your target industries...`);
     await delay(700);
     log("📊 Scoring matches against your profile...");
     await delay(600);
@@ -563,13 +584,13 @@ async function runSearch(forceRefresh=false){
   } else {
     // Browser mode — live web search
     log("🚀 Launching live web search...");
-    log(`🔍 Searching LinkedIn, Indeed, Glassdoor + ${TOP_ORGS.length} career pages...`);
+    log(`🔍 Searching LinkedIn, Indeed, Glassdoor, and target industry career pages...`);
     try {
       // Search uses Sonnet 4.5 (the callAPI default) for quality.
       // To experiment with Haiku later, pass "claude-haiku-4-5-20251001"
       // as the 6th argument. trackCost auto-detects and prices accordingly.
       const data = await callAPI(searchPrompt(),
-        `Find current healthcare IT executive job openings for ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})} matching this profile. Use web search.`,
+        `Find current job openings for ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})} matching the candidate profile provided above. Search the candidate's target industries, target roles, target locations, and seniority level. Use web search.`,
         5000, true
       );
       log("📊 Scoring matches against your profile...");
